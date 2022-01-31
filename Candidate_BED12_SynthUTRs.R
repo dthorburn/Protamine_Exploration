@@ -5,6 +5,9 @@ suppressMessages(library(dplyr))
 gtf_path <- "/path/to/GTFs" ## Directory with all the GTFs downloaded from Ensembl metazoa. 
 orths <- fread("FBgn0013300_Orthology.csv") ## Get from OrthoFinder
 
+## A function to convert GTF coordinates into BED12 format and if there are no UTRs it creates synthetic ones by extending the UTRs by the mean ditance of the real ones in this data.
+## Empirical estimates in this dataset are 5'=~200 & 3'=~300, rounded to the nearest 100. 
+## To only extract BEDs with non-synthetic UTRs use syn_3/5_length = 0
 Estimate_UTRs <- function(transcript_ID, Assembly_Accession = NA){
 	message(paste("\tCalculating:", transcript_ID))
 	gtf_trans <- subset(temp_gtf, transcript_id == transcript_ID)
@@ -21,7 +24,7 @@ Estimate_UTRs <- function(transcript_ID, Assembly_Accession = NA){
 
 ## A function to convert GTF coordinates into BED12 format and if there are no UTRs it creates synthetic ones by extending the UTRs by the mean ditance of the real ones in this data.
 ## Empirical estimates in this dataset are 5'=~200 & 3'=~300, rounded to the nearest 100. 
-Make_BED12 <- function(transcript_ID, syn_5_length = 200, syn_3_length = 300){
+Make_BED12 <- function(transcript_ID, syn_5_length = 0, syn_3_length = 0, x5_only = FALSE, x3_only = TRUE){
 	message(paste("\t\tExtracting:", transcript_ID))
 	gtf_trans <- subset(temp_gtf, transcript_id == transcript_ID)
 	jus_trans <- subset(gtf_trans, type == "transcript")
@@ -38,16 +41,17 @@ Make_BED12 <- function(transcript_ID, syn_5_length = 200, syn_3_length = 300){
 
 	bStarts_raw <- (jus_exons - jus_trans$start)
 	bSizes_raw <- gtf_trans[blocks,width]
-	start_raw <- (jus_trans$start - 1)
+	start_raw <- (jus_trans$start - 1) ## It was not taking the first bp for some reason. This is what the converted USCS bed12's have instead. 
 	end_raw <- jus_trans$end
 	
-	## Reversing the order if it's the negative strand
+	## Reversing the order if it's the negative strand - it's what USCS tools seem to do
 	if(jus_trans$strand == "-"){
 		bStarts_raw <- bStarts_raw %>% rev
 		bSizes_raw <- bSizes_raw %>% rev
 	}
 	
-	## Adding the synthetic UTRs if needed, and ensuring strandedness is taken into account.
+	## Adding the synthetic UTRs if needed, and ensuring strandedness is taken into account. This got way more complicated than I had anticipated. Strandedness is a bitch. 
+	## Turns out the same logic is applied as expected, but I needed to reverse the order of the blocks. 
 	if(grepl(pattern = "syn5", temp_name)){
 		message(paste0("\t\t\tAdding synthetic 5' to ", transcript_ID))
 		if(jus_trans$strand == "+"){
@@ -114,11 +118,100 @@ Make_BED12 <- function(transcript_ID, syn_5_length = 200, syn_3_length = 300){
 	temp_bed[,"name" := ifelse(start <= 0, paste0(name, "_Adj_5UTR"), name)]
 	temp_bed[,"start" := ifelse(start <= 0, 1, start)]
 	temp_bed[,"thickStart" := ifelse(thickStart <= 0, 1, thickStart)]
+	
+	if(x5_only == FALSE & x3_only == FALSE){
+		## Case 1: Not extracting just the UTRs
+#		return(temp_bed)
+	} 	else 	if(x5_only == TRUE){
+		## Case 2: Extracting just the 5' UTRs 
+		message(paste0("\t\t\t\tExtracting only 5' UTR bed for ", transcript_ID))
+		## Case 2.1: Synthetic 5' 
+		if(grepl(pattern = "Both|syn5", temp_name)){
+			## Dealing with start and end locations			
+			if(jus_trans$strand == "+"){
+				## Case 2.1.1: Synthetic forward strand
+				temp_bed$end <- jus_trans$start - 1  
+			} else if(jus_trans$strand == "-"){
+				## Case 2.1.2: Synthetic reverse strand
+				temp_bed$start <- jus_trans$end
+			}
+			## Changing the number of bedBlocks to 1 since it's just the synthetic UTR to be extracted. 
+			## and then altering the rest of the temp bed
+			temp_bed$blockCount <- 1
+			temp_bed$name <- paste0(temp_bed$name, "_5only")
+			temp_bed$blockSizes <- c(syn_5_length, "") %>% paste(collapse = ",")
+			temp_bed$blockStarts <- c(0, "") %>% paste(collapse = ",")
+			temp_bed$thickStart <- temp_bed$start
+			temp_bed$thickEnd <- temp_bed$end
+		} else {
+			## Taking the coordinates of the UTR from the GTF file and sorting it
+			gtf_trans_utr <- subset(gtf_trans, type == "five_prime_utr")
+			setkey(gtf_trans_utr, start, end)
+
+			## Adjusting the temporary bed
+			temp_bed$start <- gtf_trans_utr$start[1] - 1
+			temp_bed$end <- gtf_trans_utr$end[nrow(gtf_trans_utr)]
+			temp_bed$name <- paste0(temp_bed$name, "_5only")
+			temp_bed$blockCount <- grepl(pattern = "five", gtf_trans$type) %>% sum
+			temp_bed$blockSizes <- c(gtf_trans_utr$width, "") %>% paste(collapse = ",")
+			temp_bed$blockStarts <- c((gtf_trans_utr$start - gtf_trans_utr$start[1]), "") %>% paste(collapse = ",")
+			temp_bed$thickStart <- temp_bed$start
+			temp_bed$thickEnd <- temp_bed$end
+		}
+#		return(temp_bed)
+		## Logic here is to extract the first/last n number of entries in the blockSizes and blockStarts variables of the bed to create the UTR only entries. 
+		## The difficulty will be to account for the strandedness and when syntehtic ones are included. 
+		## Another problem is using the "exon" tag above, as some exons with UTRs attached (i.e., no gap combine exon coordinates as CDS+UTR; see TDAL004025-RA for example)
+		## The above code DOES NOT ACCOUNT FOR THE STRANDEDNESS OR EXON PROBLEMS - FIX ME!
+
+	}	 else 	if(x3_only == TRUE){
+		## Case 3: extracting just the 3'
+		message(paste0("\t\t\t\tExtracting only 3' UTR bed for ", transcript_ID))
+		gtf_trans_utr <- subset(gtf_trans, type == "three_prime_utr")
+		setkey(gtf_trans_utr, start, end)
 		
-	return(temp_bed)
+		## Case 3.1: Synthetic 3'
+		if(grepl(pattern = "Both|syn3", temp_name)){
+			if(jus_trans$strand == "+"){
+				## Case 3.1.1: Synthetic forward strand
+				temp_bed$start <- jus_trans$end # + 1 - Is this necessary? 
+			} else if(jus_trans$strand == "-"){
+				## Case 3.1.2: Synthetic reverse strand
+				temp_bed$end <- jus_trans$start - 1
+			}
+			temp_bed$name <- paste0(temp_bed$name, "_3only")
+			temp_bed$blockCount <- 1
+			temp_bed$blockSizes <- c(syn_3_length, "") %>% paste(collapse = ",")
+			temp_bed$blockStarts <- c(0, "") %>% paste(collapse = ",")
+			temp_bed$thickStart <- temp_bed$start
+			temp_bed$thickEnd <- temp_bed$end
+		} else {
+			## Case 3.2: Real 3' - The same code as the real 5', but logically I'm going to keep it organised like this as it's easier to follow.
+			gtf_trans_utr <- subset(gtf_trans, type == "three_prime_utr")
+			setkey(gtf_trans_utr, start, end)
+			temp_bed$start <- gtf_trans_utr$start[1] - 1
+			temp_bed$end <- gtf_trans_utr$end[nrow(gtf_trans_utr)]
+			temp_bed$name <- paste0(temp_bed$name, "_3only")
+			old_blockCount <- temp_bed$blockCount
+			temp_bed$blockCount <- grepl(pattern = "three", gtf_trans$type) %>% sum
+			temp_bed$blockSizes <- c(gtf_trans_utr$width, "") %>% paste(collapse = ",")
+			temp_bed$blockStarts <- c((gtf_trans_utr$start - gtf_trans_utr$start[1]), "") %>% paste(collapse = ",")
+			temp_bed$thickStart <- temp_bed$start
+			temp_bed$thickEnd <- temp_bed$end
+		}
+#		return(temp_bed)
+	}
+	## This is to handle the cases when synthetic primers are not present and UTR only options are TRUE. 
+	## It will not return the empty beds
+	if(grepl(pattern = "^0,$", temp_bed$blockSizes)){
+		message(paste0("\t\t\t\tWARN: No UTRs to extract - not returning bed for: ", temp_name))
+	} else {
+		return(temp_bed)
+	}
 }
+	
 ## A loop to go through the assembly IDs and take all 
-for(spec in unique(orths$Assembly_Accession)[33]){
+for(spec in unique(orths$Assembly_Accession)){
 	move_to_next <- 1
 	message(paste("Starting on:", spec))
 	
