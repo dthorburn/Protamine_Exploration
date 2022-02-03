@@ -16,12 +16,12 @@ I've developed a [nextflow](https://www.nextflow.io/) pipeline (version 20.10.0;
 ### Usage
 To use this pipeline follow these instructions:
 
-1. Download the `RAxML.*` files into your project directory. 
-2. Update the `RAxML.config` file to reflect your needs. For the majority of cases, you'll only need to update the input directory path (i.e., `UnalignDir` if you have not aligned the sequences, or `AlignDir` if you are providing aligned sequences). *NB. The pipeline will create a tree for each fasta file in the directory*. 
-3. Update the project directory path in the `RAxML.sh` file. 
-4. Run the pipeline using the command `qsub RAxML.sh`
+1. Download the `RAxML_Tree.*` files into your project directory. 
+2. Update the `RAxML_Tree.config` file to reflect your needs. For the majority of cases, you'll only need to update the input directory path (i.e., `UnalignDir` if you have not aligned the sequences, or `AlignDir` if you are providing aligned sequences). *NB. The pipeline will create a tree for each fasta file in the directory*. 
+3. Update the project directory path in the `RAxML_Tree.sh` file. 
+4. Run the pipeline using the command `qsub RAxML_Tree.sh`
 
-Below is the help message from `RAxML.nf`:
+Below is the help message from `RAxML_Tree.nf`:
 ```
 Usage:
   This pipeline was developed to use on Imperial College London's HPC. Alternatively, you can set up a conda environment with
