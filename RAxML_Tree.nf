@@ -2,7 +2,7 @@
 
 // Pipeline developed for building a ML phylogenetic tree based upon a fasta file. 
 // Author: Miles Thorburn <d.thorburn@imperial.ac.uk>
-// Date last modified: 03/02/2022
+// Date last modified: 02/02/2022
 
 def helpMessage() {
   log.info """
@@ -129,19 +129,20 @@ if( params.Skip_ML == false ) {
     publishDir(
       path: "${params.TreePartsDir}",
       mode: 'copy',
+      saveAs: { filename -> "${SampleID}.ML" }
     )
 
     input:
     set SampleID, path(aln_fas) from ml_in_ch
 
     output:
-    tuple val (SampleID), path("RAxML_bestTree.${SampleID}_ML_Tree.nwk") into ml_tree
+    tuple val (SampleID), path("RAxML_bestTree.${SampleID}.nwk") into ml_tree
 
     beforeScript 'module load raxml/8.2.9'
 
     script:
     """
-    raxmlHPC-AVX -m ${params.ML_Model} -p ${params.ML_Seed} -N ${params.ML_Iters} -s ${aln_fas} ${params.ML_argmts} -n ${SampleID}_ML_Tree.nwk
+    raxmlHPC-AVX -m ${params.ML_Model} -p ${params.ML_Seed} -N ${params.ML_Iters} -s ${aln_fas} ${params.ML_argmts} -n ${SampleID}.nwk
     """
   }
 }
@@ -172,6 +173,12 @@ if( params.Skip_BS == false ){
 
     executor = 'pbspro'
     clusterOptions = "-lselect=1:ncpus=${params.BS_threads}:mem=${params.BS_memory}gb -lwalltime=${params.BS_walltime}:00:00"
+
+    // Deprecated due to output channel being consumed by collectFile operator which publishes the file
+    //publishDir(
+    //  path: "${params.TreePartsDir}",
+    //  mode: 'copy',
+    //)
 
     input:
     set SampleID, path(aln_fas), rep from Parallel_bs_in_ch
@@ -204,7 +211,7 @@ if( params.Skip_BS == false ){
   // This should make it so this process runs afer all the bootstrapping is complete. 
   raw_bs_trees
     .collectFile(storeDir: "${params.TreePartsDir}") { SampleID, trees -> 
-      [ "${SampleID}_all_boostraps.nwk",  trees ]}
+      [ "${SampleID}.BOOTS",  trees ]}
     .set { all_trees }
 }
 
@@ -213,14 +220,19 @@ if( params.Skip_BuildTree == false ){
   // Handling when either the ML or BS steps are skipped. Mostly for debugging. 
   if( params.Skip_ML ){
     Channel
-      .fromPath("${params.TreePartsDir}/*_ML_Tree.nwk")
+      .fromPath("${params.TreePartsDir}/*.ML")
       .ifEmpty { error "No ML tree detected in $ProjectDir/02_Tree_Parts" }
       .map { file -> tuple(file.baseName, file) }
       .set { ml_tree }
   }
   if( params.Skip_BS ){
+    //Channel
+    //  .fromPath("${params.TreePartsDir}/RAxML_bootstrap.*")
+    //  .ifEmpty { error "No bootstraps detected in $ProjectDir/02_Tree_Parts" }
+    //  .map { file -> tuple(file.baseName, file) }
+    //  .set { raw_bs_trees }
     Channel
-        .fromPath("${params.TreePartsDir}/*_all_boostraps.nwk")
+        .fromPath("${params.TreePartsDir}/*.BOOTS")
         .ifEmpty { error "No bootstrap file detected in ${params.TreePartsDir}" }
         .map { file -> tuple(file.baseName, file) }
         .set { all_trees }
@@ -228,7 +240,7 @@ if( params.Skip_BuildTree == false ){
 
   // Combining the files into a single tuple to ensure the correct files are used for each sample
   // Using the 'by' operator means the first object in the tuple of each channel is used as the index. 
-  // Indices are zero-based.
+  // Indices are zero-based. Do I need to add .collect()?
   ml_tree
     .combine( all_trees, by: 0 )
     .set { all_tree_parts }
@@ -246,11 +258,15 @@ if( params.Skip_BuildTree == false ){
       mode: 'move',
     )
 
+    beforeScript 'module load raxml/8.2.9'
+
     input:
+    //set SampleID_ml, path(ml_tree) from ml_tree
+    //set SampleID_bs, path(bs_trees) from all_trees
     set SampleID, path(ml_tree), path(bs_trees) from all_tree_parts
 
     output:
-    path("${SampleID}_Final_Supported.nwk")
+    path("*")
 
     script:
     """
@@ -258,3 +274,4 @@ if( params.Skip_BuildTree == false ){
     """
   }
 }
+
